@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
+# encoding: utf-8
 
 # Copyright 2017 Johns Hopkins University (Shinji Watanabe)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 """Common functions for ASR."""
 
-import editdistance
 import json
 import logging
-import numpy as np
-import six
 import sys
 
+import editdistance
 from itertools import groupby
+import numpy as np
+import six
+
+from espnet.nets.beam_search_transducer import BeamSearchTransducer
 
 
 def end_detect(ended_hyps, i, M=3, D_end=np.log(1 * np.exp(-10))):
@@ -30,14 +33,16 @@ def end_detect(ended_hyps, i, M=3, D_end=np.log(1 * np.exp(-10))):
     if len(ended_hyps) == 0:
         return False
     count = 0
-    best_hyp = sorted(ended_hyps, key=lambda x: x['score'], reverse=True)[0]
+    best_hyp = sorted(ended_hyps, key=lambda x: x["score"], reverse=True)[0]
     for m in six.moves.range(M):
         # get ended_hyps with their length is i - m
         hyp_length = i - m
-        hyps_same_length = [x for x in ended_hyps if len(x['yseq']) == hyp_length]
+        hyps_same_length = [x for x in ended_hyps if len(x["yseq"]) == hyp_length]
         if len(hyps_same_length) > 0:
-            best_hyp_same_length = sorted(hyps_same_length, key=lambda x: x['score'], reverse=True)[0]
-            if best_hyp_same_length['score'] - best_hyp['score'] < D_end:
+            best_hyp_same_length = sorted(
+                hyps_same_length, key=lambda x: x["score"], reverse=True
+            )[0]
+            if best_hyp_same_length["score"] - best_hyp["score"] < D_end:
                 count += 1
 
     if count == M:
@@ -57,14 +62,16 @@ def label_smoothing_dist(odim, lsm_type, transcript=None, blank=0):
     :return:
     """
     if transcript is not None:
-        with open(transcript, 'rb') as f:
-            trans_json = json.load(f)['utts']
+        with open(transcript, "rb") as f:
+            trans_json = json.load(f)["utts"]
 
-    if lsm_type == 'unigram':
-        assert transcript is not None, 'transcript is required for %s label smoothing' % lsm_type
+    if lsm_type == "unigram":
+        assert transcript is not None, (
+            "transcript is required for %s label smoothing" % lsm_type
+        )
         labelcount = np.zeros(odim)
         for k, v in trans_json.items():
-            ids = np.array([int(n) for n in v['output'][0]['tokenid'].split()])
+            ids = np.array([int(n) for n in v["output"][0]["tokenid"].split()])
             # to avoid an error when there is no text in an uttrance
             if len(ids) > 0:
                 labelcount[ids] += 1
@@ -73,8 +80,7 @@ def label_smoothing_dist(odim, lsm_type, transcript=None, blank=0):
         labelcount[blank] = 0  # remove counts for blank
         labeldist = labelcount.astype(np.float32) / np.sum(labelcount)
     else:
-        logging.error(
-            "Error: unexpected label smoothing type: %s" % lsm_type)
+        logging.error("Error: unexpected label smoothing type: %s" % lsm_type)
         sys.exit()
 
     return labeldist
@@ -105,14 +111,18 @@ class ErrorCalculator(object):
     :return:
     """
 
-    def __init__(self, char_list, sym_space, sym_blank, report_cer=False, report_wer=False):
+    def __init__(
+        self, char_list, sym_space, sym_blank, report_cer=False, report_wer=False
+    ):
         """Construct an ErrorCalculator object."""
         super(ErrorCalculator, self).__init__()
+
+        self.report_cer = report_cer
+        self.report_wer = report_wer
+
         self.char_list = char_list
         self.space = sym_space
         self.blank = sym_blank
-        self.report_cer = report_cer
-        self.report_wer = report_wer
         self.idx_blank = self.char_list.index(self.blank)
         if self.space in self.char_list:
             self.idx_space = self.char_list.index(self.space)
@@ -190,15 +200,13 @@ class ErrorCalculator(object):
         for i, y_hat in enumerate(ys_hat):
             y_true = ys_pad[i]
             eos_true = np.where(y_true == -1)[0]
-            eos_true = eos_true[0] if len(eos_true) > 0 else len(y_true)
-            # To avoid wrong higger WER than the one obtained from the decoding
-            # eos from y_true is used to mark the eos in y_hat
-            # because of that y_hats has not padded outs with -1.
-            seq_hat = [self.char_list[int(idx)] for idx in y_hat[:eos_true]]
+            ymax = eos_true[0] if len(eos_true) > 0 else len(y_true)
+            # NOTE: padding index (-1) in y_true is used to pad y_hat
+            seq_hat = [self.char_list[int(idx)] for idx in y_hat[:ymax]]
             seq_true = [self.char_list[int(idx)] for idx in y_true if int(idx) != -1]
-            seq_hat_text = "".join(seq_hat).replace(self.space, ' ')
-            seq_hat_text = seq_hat_text.replace(self.blank, '')
-            seq_true_text = "".join(seq_true).replace(self.space, ' ')
+            seq_hat_text = "".join(seq_hat).replace(self.space, " ")
+            seq_hat_text = seq_hat_text.replace(self.blank, "")
+            seq_true_text = "".join(seq_true).replace(self.space, " ")
             seqs_hat.append(seq_hat_text)
             seqs_true.append(seq_true_text)
         return seqs_hat, seqs_true
@@ -214,8 +222,8 @@ class ErrorCalculator(object):
         char_eds, char_ref_lens = [], []
         for i, seq_hat_text in enumerate(seqs_hat):
             seq_true_text = seqs_true[i]
-            hyp_chars = seq_hat_text.replace(' ', '')
-            ref_chars = seq_true_text.replace(' ', '')
+            hyp_chars = seq_hat_text.replace(" ", "")
+            ref_chars = seq_true_text.replace(" ", "")
             char_eds.append(editdistance.eval(hyp_chars, ref_chars))
             char_ref_lens.append(len(ref_chars))
         return float(sum(char_eds)) / sum(char_ref_lens)
@@ -235,4 +243,160 @@ class ErrorCalculator(object):
             ref_words = seq_true_text.split()
             word_eds.append(editdistance.eval(hyp_words, ref_words))
             word_ref_lens.append(len(ref_words))
+        return float(sum(word_eds)) / sum(word_ref_lens)
+
+
+class ErrorCalculatorTransducer(object):
+    """Calculate CER and WER for transducer models.
+
+    Args:
+        decoder (AbsDecoder): decoder module
+        token_list (list): list of tokens
+        sym_space (str): space symbol
+        sym_blank (str): blank symbol
+        report_cer (boolean): compute CER option
+        report_wer (boolean): compute WER option
+
+    """
+
+    def __init__(
+        self,
+        decoder,
+        token_list,
+        sym_space,
+        sym_blank,
+        report_cer=False,
+        report_wer=False,
+    ):
+        """Construct an ErrorCalculator object for transducer model."""
+        super().__init__()
+
+        self.beam_search = BeamSearchTransducer(
+            decoder=decoder,
+            beam_size=1,
+        )
+
+        self.decoder = decoder
+
+        self.token_list = token_list
+        self.space = sym_space
+        self.blank = sym_blank
+
+        self.report_cer = report_cer
+        self.report_wer = report_wer
+
+    def __call__(self, hs_pad, ys_pad):
+        """Calculate sentence-level WER/CER score for transducer models.
+
+        Args:
+            hs_pad (torch.Tensor): batch of padded input sequence (batch, T, D)
+            ys_pad (torch.Tensor): reference (batch, seqlen)
+
+        Returns:
+            (float): sentence-level CER score
+            (float): sentence-level WER score
+
+        """
+        cer, wer = None, None
+
+        if not self.report_cer and not self.report_wer:
+            return cer, wer
+
+        batchsize = int(hs_pad.size(0))
+        batch_nbest = []
+
+        hs_pad = hs_pad.to(next(self.decoder.parameters()).device)
+
+        for b in six.moves.range(batchsize):
+            nbest_hyps = self.beam_search(hs_pad[b])
+            batch_nbest.append(nbest_hyps)
+
+        ys_hat = [nbest_hyp.yseq[1:] for nbest_hyp in batch_nbest]
+
+        seqs_hat, seqs_true = self.convert_to_char(ys_hat, ys_pad.cpu())
+
+        if self.report_cer:
+            cer = self.calculate_cer(seqs_hat, seqs_true)
+
+        if self.report_wer:
+            wer = self.calculate_wer(seqs_hat, seqs_true)
+
+        return cer, wer
+
+    def convert_to_char(self, ys_hat, ys_pad):
+        """Convert index to character.
+
+        Args:
+            ys_hat (torch.Tensor): prediction (batch, seqlen)
+            ys_pad (torch.Tensor): reference (batch, seqlen)
+
+        Returns:
+            (list): token list of prediction
+            (list): token list of reference
+
+        """
+        seqs_hat, seqs_true = [], []
+
+        for i, y_hat in enumerate(ys_hat):
+            y_true = ys_pad[i]
+
+            eos_true = np.where(y_true == -1)[0]
+            eos_true = eos_true[0] if len(eos_true) > 0 else len(y_true)
+
+            seq_hat = [self.token_list[int(idx)] for idx in y_hat[:eos_true]]
+            seq_true = [self.token_list[int(idx)] for idx in y_true if int(idx) != -1]
+
+            seq_hat_text = "".join(seq_hat).replace(self.space, " ")
+            seq_hat_text = seq_hat_text.replace(self.blank, "")
+            seq_true_text = "".join(seq_true).replace(self.space, " ")
+
+            seqs_hat.append(seq_hat_text)
+            seqs_true.append(seq_true_text)
+
+        return seqs_hat, seqs_true
+
+    def calculate_cer(self, seqs_hat, seqs_true):
+        """Calculate sentence-level CER score for transducer model.
+
+        Args:
+            seqs_hat (torch.Tensor): prediction (batch, seqlen)
+            seqs_true (torch.Tensor): reference (batch, seqlen)
+
+        Returns:
+            (float): average sentence-level CER score
+
+        """
+        char_eds, char_ref_lens = [], []
+
+        for i, seq_hat_text in enumerate(seqs_hat):
+            seq_true_text = seqs_true[i]
+            hyp_chars = seq_hat_text.replace(" ", "")
+            ref_chars = seq_true_text.replace(" ", "")
+
+            char_eds.append(editdistance.eval(hyp_chars, ref_chars))
+            char_ref_lens.append(len(ref_chars))
+
+        return float(sum(char_eds)) / sum(char_ref_lens)
+
+    def calculate_wer(self, seqs_hat, seqs_true):
+        """Calculate sentence-level WER score for transducer model.
+
+        Args:
+            seqs_hat (torch.Tensor): prediction (batch, seqlen)
+            seqs_true (torch.Tensor): reference (batch, seqlen)
+
+        Returns:
+            (float): average sentence-level WER score
+
+        """
+        word_eds, word_ref_lens = [], []
+
+        for i, seq_hat_text in enumerate(seqs_hat):
+            seq_true_text = seqs_true[i]
+            hyp_words = seq_hat_text.split()
+            ref_words = seq_true_text.split()
+
+            word_eds.append(editdistance.eval(hyp_words, ref_words))
+            word_ref_lens.append(len(ref_words))
+
         return float(sum(word_eds)) / sum(word_ref_lens)
